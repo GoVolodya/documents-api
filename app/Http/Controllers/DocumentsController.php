@@ -30,9 +30,11 @@ class DocumentsController extends Controller
      */
     public function store(DocumentStoreRequest $request)
     {
+        $user = $request->user();
         $document = Document::create([
             'description' => $request->validated('description') ?? '',
             'path' => $request->validated('file')->store('private/documents'),
+            'user_id' => $user->id,
         ]);
         event(new DocumentCreatedEvent($document));
 
@@ -42,13 +44,13 @@ class DocumentsController extends Controller
     /**
      * Display the specified resource.
      */
-    public function show(string $id)
+    public function show(Request $request, string $id)
     {
         try {
             $document = Document::findOrFail($id);
 
-            if ($user = Auth::user()) {
-                $url = URL::signedRoute('profile.unsubscribe-weekly-emails', ['user' => $user->id]);
+            if ($request->user()) {
+                $url = URL::signedRoute('download', ['id' => $id]);
                 $document->downloadLink = $url;
             }
 
@@ -95,10 +97,12 @@ class DocumentsController extends Controller
     {
         try {
             $document = Document::findOrFail($id);
+
             if (!$request->hasValidSignature()) {
                 return response()->json(['error' => 'Document if forbidden for you.']);
             }
-            return Storage::disk('private')->download($document->path);
+
+            return Storage::download($document->path, "document-$id");
         } catch (Exception $exception) {
             return response()->json(['error' => "Document with id $id not found."], Response::HTTP_NOT_FOUND);
         }
@@ -112,5 +116,25 @@ class DocumentsController extends Controller
         $ids = $request->validated('ids');
         Document::whereIn('id', $ids)->delete();
         return response()->json(['message' => 'Documents were deleted'], Response::HTTP_OK);
+    }
+
+    /**
+     * Show the users documents token and creates new if not exists.
+     */
+    public function showToken()
+    {
+        $user = Auth::user();
+
+        if (!$user) {
+            return response()->json(['error' => 'You must login to see the token.']);
+        }
+
+        if ($user->currentAccessToken()) {
+            return response()->json(['token' => $user->currentAccessToken()->plainTextToken]);
+        }
+
+        $token = $user->createToken('documents_token')->plainTextToken;
+
+        return response()->json(['token' => $token]);
     }
 }

@@ -9,6 +9,6 @@ class DocumentObserver
 {
     public function deleting(Document $document)
     {
-        Storage::disk('private')->delete($document->path);
+        Storage::delete($document->path);
     }
 }
