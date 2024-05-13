@@ -6,8 +6,8 @@ use App\Events\DocumentCreatedEvent;
 use App\Http\Requests\DocumentsDeleteRequest;
 use App\Http\Requests\DocumentStoreRequest;
 use App\Http\Requests\DocumentUpdateRequest;
+use App\Http\Resources\DocumentResource;
 use App\Models\Document;
-use Exception;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Auth;
@@ -21,8 +21,9 @@ class DocumentsController extends Controller
      */
     public function index()
     {
-        $documents = Document::orderByDesc('created_at')->get();
-        return response()->json($documents, Response::HTTP_OK);
+        $documents = Document::orderByDesc('created_at')->paginate(10);
+
+        return DocumentResource::collection($documents);
     }
 
     /**
@@ -30,12 +31,11 @@ class DocumentsController extends Controller
      */
     public function store(DocumentStoreRequest $request)
     {
-        $user = $request->user();
         $document = Document::create([
             'description' => $request->validated('description') ?? '',
             'path' => $request->validated('file')->store('private/documents'),
-            'user_id' => $user->id,
         ]);
+
         event(new DocumentCreatedEvent($document));
 
         return response()->json($document, Response::HTTP_CREATED);
@@ -44,68 +44,51 @@ class DocumentsController extends Controller
     /**
      * Display the specified resource.
      */
-    public function show(Request $request, string $id)
+    public function show(Request $request, Document $document)
     {
-        try {
-            $document = Document::findOrFail($id);
-
-            if ($request->user()) {
-                $url = URL::signedRoute('download', ['id' => $id]);
-                $document->downloadLink = $url;
-            }
-
-            return response()->json($document, Response::HTTP_OK);
-        } catch (Exception $exception) {
-            return response()->json(['error' => "Document with id $id not found."], Response::HTTP_NOT_FOUND);
+        if ($request->user()) {
+            $url = URL::signedRoute('download', ['document' => $document->id]);
+            $document->downloadLink = $url;
         }
+
+        return response()->json($document, Response::HTTP_OK);
     }
 
     /**
      * Update the specified resource in storage.
      */
-    public function update(DocumentUpdateRequest $request, string $id)
+    public function update(DocumentUpdateRequest $request, Document $document)
     {
-        try {
-            $document = Document::findOrFail($id);
-            $description = $request->validated('description');
-            $document->description = $description;
-            $document->save();
-            return response()->json($document, Response::HTTP_ACCEPTED);
-        } catch (Exception $exception) {
-            return response()->json(['error' => "Document with id $id not found."], Response::HTTP_NOT_FOUND);
-        }
+        $description = $request->validated('description');
+        $document->description = $description;
+        $document->save();
+
+        return response()->json($document, Response::HTTP_ACCEPTED);
     }
 
     /**
      * Remove the specified resource from storage.
      */
-    public function destroy(string $id)
+    public function destroy(Document $document)
     {
-        try {
-            $document = Document::findOrFail($id);
-            $document->delete();
-            return response()->json(['message' => "Document with id $id was deleted."], Response::HTTP_ACCEPTED);
-        } catch (Exception $exception) {
-            return response()->json(['error' => "Document with id $id not found."], Response::HTTP_NOT_FOUND);
-        }
+        $document->delete();
+
+        return response()->json(
+            ['message' => "Document with id $document->id was deleted."],
+            Response::HTTP_OK
+        );
     }
 
     /**
      * Download private file if available for current auth user.
      */
-    public function download(Request $request, string $id)
+    public function download(Request $request, Document $document)
     {
-        try {
-            $document = Document::findOrFail($id);
-
-            if (!$request->hasValidSignature()) {
-                return response()->json(['error' => 'Document if forbidden for you.']);
-            }
-
-            return Storage::download($document->path, "document-$id");
-        } catch (Exception $exception) {
-            return response()->json(['error' => "Document with id $id not found."], Response::HTTP_NOT_FOUND);
+        if (!$request->hasValidSignature()) {
+            return response()->json(['error' => 'Document if forbidden for you.']);
         }
+
+        return Storage::download($document->path, "document-$document->id");
     }
 
     /**
@@ -114,7 +97,9 @@ class DocumentsController extends Controller
     public function deleteMultiple(DocumentsDeleteRequest $request)
     {
         $ids = $request->validated('ids');
-        Document::whereIn('id', $ids)->delete();
+        $idsToDelete = Document::whereIn('id', $ids)->pluck('id');
+        Document::destroy($idsToDelete);
+
         return response()->json(['message' => 'Documents were deleted'], Response::HTTP_OK);
     }
 
